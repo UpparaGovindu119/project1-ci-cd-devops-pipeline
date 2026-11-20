@@ -13,10 +13,9 @@ permissions:
   contents: read
 
 jobs:
-  build-scan-deploy:
-    name: Build, Scan and Deploy
+  build:
+    name: Build and Security Scan
     runs-on: ubuntu-latest
-    environment: development
 
     steps:
       - name: Checkout Code
@@ -43,36 +42,36 @@ jobs:
           ignore-unfixed: true
           vuln-type: library
 
-      - name: Verify Required Secrets
-        if: github.event_name == 'push'
+  docker:
+    name: Build and Push Docker Image
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: development
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Verify Docker Hub Secrets
         env:
           DH_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
           set -e
           test -n "$DH_USERNAME" || { echo "::error::DOCKERHUB_USERNAME missing"; exit 1; }
           test -n "$DH_TOKEN" || { echo "::error::DOCKERHUB_TOKEN missing"; exit 1; }
-          test -n "$EC2_HOST" || { echo "::error::EC2_HOST missing"; exit 1; }
-          test -n "$EC2_USERNAME" || { echo "::error::EC2_USERNAME missing"; exit 1; }
-          test -n "$EC2_SSH_KEY" || { echo "::error::EC2_SSH_KEY missing"; exit 1; }
-          echo "All required secrets are configured"
 
       - name: Setup Docker Buildx
-        if: github.event_name == 'push'
         uses: docker/setup-buildx-action@v4
 
       - name: Docker Hub Login
-        if: github.event_name == 'push'
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and Push Docker Image
-        if: github.event_name == 'push'
+      - name: Build and Push Image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -82,20 +81,36 @@ jobs:
             upparagovindu/ci-cd-devops-pipeline:latest
             upparagovindu/ci-cd-devops-pipeline:${{ github.sha }}
 
-      - name: Check EC2 SSH Connectivity
-        if: github.event_name == 'push'
+  deploy:
+    name: Deploy to EC2
+    needs: docker
+    runs-on: ubuntu-latest
+    environment: development
+
+    steps:
+      - name: Verify EC2 Secrets
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          set -e
+          test -n "$EC2_HOST" || { echo "::error::EC2_HOST missing"; exit 1; }
+          test -n "$EC2_USERNAME" || { echo "::error::EC2_USERNAME missing"; exit 1; }
+          test -n "$EC2_SSH_KEY" || { echo "::error::EC2_SSH_KEY missing"; exit 1; }
+
+      - name: Check EC2 SSH Port
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          echo "Checking EC2 SSH port..."
-          if ! timeout 10 bash -c "cat < /dev/null > /dev/tcp/$EC2_HOST/22"; then
-            echo "::error::Cannot reach EC2 port 22. Check Security Group, NACL, route and EC2 status."
+          echo "Checking EC2 SSH connectivity..."
+          timeout 15 bash -c "cat < /dev/null > /dev/tcp/$EC2_HOST/22" || {
+            echo "::error::EC2 port 22 is unreachable. Check EC2 network and Security Group."
             exit 1
-          fi
-          echo "EC2 SSH port is reachable"
+          }
+          echo "SSH port is reachable."
 
-      - name: Deploy to EC2
-        if: github.event_name == 'push'
+      - name: Deploy Application
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -107,25 +122,27 @@ jobs:
           script: |
             set -e
 
-            echo "Starting deployment"
-
+            echo "Pulling latest application image..."
             sudo docker pull upparagovindu/ci-cd-devops-pipeline:latest
 
+            echo "Creating Docker network if required..."
             sudo docker network inspect app-net >/dev/null 2>&1 || \
               sudo docker network create app-net
 
-            if sudo docker container inspect mongodb >/dev/null 2>&1; then
-              sudo docker start mongodb
-              sudo docker network connect app-net mongodb 2>/dev/null || true
-            else
+            echo "Starting MongoDB..."
+            if ! sudo docker container inspect mongodb >/dev/null 2>&1; then
               sudo docker run -d \
                 --name mongodb \
                 --network app-net \
                 -v mongodb_data:/data/db \
                 --restart unless-stopped \
                 mongo:7
+            else
+              sudo docker start mongodb
+              sudo docker network connect app-net mongodb 2>/dev/null || true
             fi
 
+            echo "Replacing Spring Boot application..."
             sudo docker rm -f spring-app 2>/dev/null || true
 
             sudo docker run -d \
@@ -136,8 +153,11 @@ jobs:
               --restart unless-stopped \
               upparagovindu/ci-cd-devops-pipeline:latest
 
-            echo "Deployment completed"
-
+            echo "Checking running containers..."
             sudo docker ps
 
+            echo "Checking application logs..."
             sudo docker logs --tail 50 spring-app
+
+            echo "Deployment commands completed."
+
