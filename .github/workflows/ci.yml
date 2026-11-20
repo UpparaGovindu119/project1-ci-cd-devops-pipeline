@@ -17,12 +17,13 @@ jobs:
     name: Build, Scan and Deploy
     runs-on: ubuntu-latest
 
+    # IMPORTANT: Your secrets are stored in this environment
+    environment: development
+
     steps:
-      # 1. Checkout code
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. Setup Java 17
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -30,11 +31,9 @@ jobs:
           java-version: '17'
           cache: maven
 
-      # 3. Maven build and test
       - name: Maven Build and Test
         run: mvn clean verify
 
-      # 4. Trivy security scan (report only)
       - name: Trivy Security Scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -46,31 +45,48 @@ jobs:
           ignore-unfixed: true
           vuln-type: library
 
-      # 5. Check Docker Hub secrets
-      - name: Verify Docker Hub Secrets
+      - name: Verify GitHub Secrets
         if: github.event_name == 'push'
         env:
           DH_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
-          if [ -z "$DH_USERNAME" ]; then
+          set -e
+
+          test -n "$DH_USERNAME" || {
             echo "::error::DOCKERHUB_USERNAME is missing"
             exit 1
-          fi
+          }
 
-          if [ -z "$DH_TOKEN" ]; then
+          test -n "$DH_TOKEN" || {
             echo "::error::DOCKERHUB_TOKEN is missing"
             exit 1
-          fi
+          }
 
-          echo "Docker Hub secrets are configured"
+          test -n "$EC2_HOST" || {
+            echo "::error::EC2_HOST is missing"
+            exit 1
+          }
 
-      # 6. Docker Buildx
+          test -n "$EC2_USERNAME" || {
+            echo "::error::EC2_USERNAME is missing"
+            exit 1
+          }
+
+          test -n "$EC2_SSH_KEY" || {
+            echo "::error::EC2_SSH_KEY is missing"
+            exit 1
+          }
+
+          echo "All required secrets are configured"
+
       - name: Setup Docker Buildx
         if: github.event_name == 'push'
         uses: docker/setup-buildx-action@v3
 
-      # 7. Docker Hub login
       - name: Docker Hub Login
         if: github.event_name == 'push'
         uses: docker/login-action@v3
@@ -78,7 +94,6 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 8. Build and push Docker image
       - name: Build and Push Docker Image
         if: github.event_name == 'push'
         uses: docker/build-push-action@v6
@@ -90,27 +105,23 @@ jobs:
             upparagovindu/ci-cd-devops-pipeline:latest
             upparagovindu/ci-cd-devops-pipeline:${{ github.sha }}
 
-      # 9. Deploy to EC2
       - name: Deploy to EC2
         if: github.event_name == 'push'
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
+          username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
 
             echo "Starting EC2 deployment"
 
-            # Pull application image
             sudo docker pull upparagovindu/ci-cd-devops-pipeline:latest
 
-            # Create Docker network if missing
             sudo docker network inspect app-net >/dev/null 2>&1 || \
               sudo docker network create app-net
 
-            # Start MongoDB
             if sudo docker container inspect mongodb >/dev/null 2>&1; then
               sudo docker start mongodb
             else
@@ -122,13 +133,10 @@ jobs:
                 mongo:7
             fi
 
-            # Connect MongoDB to application network
             sudo docker network connect app-net mongodb 2>/dev/null || true
 
-            # Remove old application container
             sudo docker rm -f spring-app 2>/dev/null || true
 
-            # Start Spring Boot application
             sudo docker run -d \
               --name spring-app \
               --network app-net \
@@ -139,8 +147,6 @@ jobs:
 
             echo "Deployment completed"
 
-            # Verify containers
             sudo docker ps
 
-            # Application logs
             sudo docker logs --tail 50 spring-app
