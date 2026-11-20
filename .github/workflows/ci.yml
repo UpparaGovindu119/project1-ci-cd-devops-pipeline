@@ -17,8 +17,8 @@ env:
   DOCKER_IMAGE: upparagovindu/ci-cd-devops-pipeline
 
 jobs:
-  build-and-scan:
-    name: Build, Test and Push
+  build-and-deploy:
+    name: Build, Scan and Deploy
     runs-on: ubuntu-latest
 
     steps:
@@ -46,7 +46,7 @@ jobs:
           java -version
           mvn -version
 
-      # 5. Build and test
+      # 5. Build and test application
       - name: Build and Test Application
         run: mvn clean verify
 
@@ -79,8 +79,8 @@ jobs:
           context: .
           push: ${{ github.event_name == 'push' }}
           tags: |
-            upparagovindu/ci-cd-devops-pipeline:latest
-            upparagovindu/ci-cd-devops-pipeline:${{ github.sha }}
+            ${{ env.DOCKER_IMAGE }}:latest
+            ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
 
       # 10. Deploy to AWS EC2
       - name: Deploy to AWS EC2
@@ -110,9 +110,9 @@ jobs:
             docker network connect app-net mongodb 2>/dev/null || true
 
             echo "Pulling Docker image..."
-            docker pull upparagovindu/ci-cd-devops-pipeline:${{ github.sha }}
+            docker pull ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
 
-            echo "Removing old container..."
+            echo "Removing old application container..."
             docker rm -f spring-app || true
 
             echo "Starting Spring Boot application..."
@@ -122,7 +122,7 @@ jobs:
               --network app-net \
               -p 8080:8080 \
               -e SPRING_DATA_MONGODB_URI="mongodb://mongodb:27017/devopsdb" \
-              upparagovindu/ci-cd-devops-pipeline:${{ github.sha }}
+              ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
 
             echo "Checking application..."
             docker ps --filter name=spring-app
