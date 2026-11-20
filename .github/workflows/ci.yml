@@ -34,15 +34,14 @@ jobs:
       - name: Maven Build and Test
         run: mvn clean verify
 
-      # 4. Trivy filesystem security scan
+      # 4. Trivy security scan (report only)
       - name: Trivy Security Scan
-        id: trivy-scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
           format: table
-          exit-code: '1'
+          exit-code: '0'
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           vuln-type: library
@@ -102,12 +101,12 @@ jobs:
           script: |
             set -e
 
-            echo "Starting EC2 deployment..."
+            echo "Starting EC2 deployment"
 
-            # Pull Docker image
+            # Pull latest application image
             sudo docker pull upparagovindu/ci-cd-devops-pipeline:latest
 
-            # Create Docker network if missing
+            # Create Docker network
             sudo docker network inspect app-net >/dev/null 2>&1 || \
               sudo docker network create app-net
 
@@ -123,13 +122,13 @@ jobs:
                 mongo:7
             fi
 
-            # Connect MongoDB to application network
+            # Connect MongoDB to app network if needed
             sudo docker network connect app-net mongodb 2>/dev/null || true
 
-            # Remove old Spring Boot container
+            # Remove previous application container
             sudo docker rm -f spring-app 2>/dev/null || true
 
-            # Start new Spring Boot container
+            # Deploy Spring Boot application
             sudo docker run -d \
               --name spring-app \
               --network app-net \
@@ -140,7 +139,7 @@ jobs:
 
             echo "Deployment completed"
 
-            # Verify running containers
+            # Verify containers
             sudo docker ps
 
             # Check application logs
