@@ -13,6 +13,7 @@ permissions:
   contents: read
 
 jobs:
+
   build:
     name: Build and Security Scan
     runs-on: ubuntu-latest
@@ -32,7 +33,7 @@ jobs:
         run: mvn clean verify
 
       - name: Trivy Security Scan
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -59,8 +60,14 @@ jobs:
           DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -e
-          test -n "$DH_USERNAME" || { echo "::error::DOCKERHUB_USERNAME missing"; exit 1; }
-          test -n "$DH_TOKEN" || { echo "::error::DOCKERHUB_TOKEN missing"; exit 1; }
+          test -n "$DH_USERNAME" || {
+            echo "::error::DOCKERHUB_USERNAME is missing"
+            exit 1
+          }
+          test -n "$DH_TOKEN" || {
+            echo "::error::DOCKERHUB_TOKEN is missing"
+            exit 1
+          }
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -71,7 +78,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and Push Image
+      - name: Build and Push Docker Image
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -84,6 +91,7 @@ jobs:
   deploy:
     name: Deploy to EC2
     needs: docker
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: development
 
@@ -95,22 +103,32 @@ jobs:
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
           set -e
-          test -n "$EC2_HOST" || { echo "::error::EC2_HOST missing"; exit 1; }
-          test -n "$EC2_USERNAME" || { echo "::error::EC2_USERNAME missing"; exit 1; }
-          test -n "$EC2_SSH_KEY" || { echo "::error::EC2_SSH_KEY missing"; exit 1; }
+          test -n "$EC2_HOST" || {
+            echo "::error::EC2_HOST is missing"
+            exit 1
+          }
+          test -n "$EC2_USERNAME" || {
+            echo "::error::EC2_USERNAME is missing"
+            exit 1
+          }
+          test -n "$EC2_SSH_KEY" || {
+            echo "::error::EC2_SSH_KEY is missing"
+            exit 1
+          }
 
-      - name: Check EC2 SSH Port
+      - name: Check EC2 SSH Connectivity
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          echo "Checking EC2 SSH connectivity..."
-          timeout 15 bash -c "cat < /dev/null > /dev/tcp/$EC2_HOST/22" || {
-            echo "::error::EC2 port 22 is unreachable. Check EC2 network and Security Group."
-            exit 1
-          }
-          echo "SSH port is reachable."
+          echo "Checking EC2 SSH port..."
+          timeout 15 bash -c \
+            "cat < /dev/null > /dev/tcp/$EC2_HOST/22" || {
+              echo "::error::EC2 SSH port 22 is unreachable"
+              exit 1
+            }
+          echo "SSH port is reachable"
 
-      - name: Deploy Application
+      - name: Deploy Application to EC2
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -122,10 +140,12 @@ jobs:
           script: |
             set -e
 
-            echo "Pulling latest application image..."
-            sudo docker pull upparagovindu/ci-cd-devops-pipeline:latest
+            IMAGE="upparagovindu/ci-cd-devops-pipeline:${{ github.sha }}"
 
-            echo "Creating Docker network if required..."
+            echo "Pulling application image..."
+            sudo docker pull "$IMAGE"
+
+            echo "Creating Docker network..."
             sudo docker network inspect app-net >/dev/null 2>&1 || \
               sudo docker network create app-net
 
@@ -139,6 +159,7 @@ jobs:
                 mongo:7
             else
               sudo docker start mongodb
+              sudo docker network inspect app-net >/dev/null 2>&1 || true
               sudo docker network connect app-net mongodb 2>/dev/null || true
             fi
 
@@ -151,12 +172,12 @@ jobs:
               -p 8080:8080 \
               -e SPRING_DATA_MONGODB_URI=mongodb://mongodb:27017/devopsdb \
               --restart unless-stopped \
-              upparagovindu/ci-cd-devops-pipeline:latest
+              "$IMAGE"
 
-            echo "Checking running containers..."
+            echo "Checking containers..."
             sudo docker ps
 
             echo "Checking application logs..."
             sudo docker logs --tail 50 spring-app
 
-            echo "Deployment commands completed."
+            echo "Deployment completed"
