@@ -22,7 +22,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. Setup Java
+      # 2. Setup Java 17
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -36,7 +36,7 @@ jobs:
 
       # 4. Trivy filesystem security scan
       - name: Trivy Security Scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.30.0
         with:
           scan-type: fs
           scan-ref: .
@@ -45,7 +45,7 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
 
-      # 5. Validate Docker Hub secrets
+      # 5. Verify Docker Hub secrets
       - name: Verify Docker Hub Secrets
         if: github.event_name == 'push'
         env:
@@ -102,14 +102,14 @@ jobs:
 
             echo "Starting EC2 deployment..."
 
-            # Pull latest application image
+            # Pull Docker image
             sudo docker pull upparagovindu/ci-cd-devops-pipeline:latest
 
-            # Create Docker network if it does not exist
+            # Create Docker network if missing
             sudo docker network inspect app-net >/dev/null 2>&1 || \
               sudo docker network create app-net
 
-            # Start MongoDB if it already exists
+            # Start MongoDB
             if sudo docker container inspect mongodb >/dev/null 2>&1; then
               sudo docker start mongodb
             else
@@ -117,13 +117,14 @@ jobs:
                 --name mongodb \
                 --network app-net \
                 -v mongodb_data:/data/db \
+                --restart unless-stopped \
                 mongo:7
             fi
 
-            # Connect existing MongoDB container to app-net if needed
+            # Connect MongoDB to application network
             sudo docker network connect app-net mongodb 2>/dev/null || true
 
-            # Remove previous Spring Boot container
+            # Remove old application container
             sudo docker rm -f spring-app 2>/dev/null || true
 
             # Start new Spring Boot container
@@ -137,8 +138,8 @@ jobs:
 
             echo "Deployment completed"
 
-            # Verify containers
+            # Verify running containers
             sudo docker ps
 
-            # Show recent application logs
+            # Check application logs
             sudo docker logs --tail 50 spring-app
