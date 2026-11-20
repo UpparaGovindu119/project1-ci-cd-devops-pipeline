@@ -36,6 +36,7 @@ jobs:
 
       # 4. Trivy filesystem security scan
       - name: Trivy Security Scan
+        id: trivy-scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
@@ -44,6 +45,7 @@ jobs:
           exit-code: '1'
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          vuln-type: library
 
       # 5. Verify Docker Hub secrets
       - name: Verify Docker Hub Secrets
@@ -102,14 +104,14 @@ jobs:
 
             echo "Starting EC2 deployment..."
 
-            # Pull latest image
+            # Pull Docker image
             sudo docker pull upparagovindu/ci-cd-devops-pipeline:latest
 
-            # Create application network if missing
+            # Create Docker network if missing
             sudo docker network inspect app-net >/dev/null 2>&1 || \
               sudo docker network create app-net
 
-            # Start MongoDB if it already exists
+            # Start MongoDB
             if sudo docker container inspect mongodb >/dev/null 2>&1; then
               sudo docker start mongodb
             else
@@ -121,13 +123,13 @@ jobs:
                 mongo:7
             fi
 
-            # Connect MongoDB to app network if needed
+            # Connect MongoDB to application network
             sudo docker network connect app-net mongodb 2>/dev/null || true
 
             # Remove old Spring Boot container
             sudo docker rm -f spring-app 2>/dev/null || true
 
-            # Deploy new Spring Boot container
+            # Start new Spring Boot container
             sudo docker run -d \
               --name spring-app \
               --network app-net \
@@ -138,7 +140,7 @@ jobs:
 
             echo "Deployment completed"
 
-            # Verify containers
+            # Verify running containers
             sudo docker ps
 
             # Check application logs
