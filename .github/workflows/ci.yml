@@ -36,7 +36,7 @@ jobs:
 
       # 4. Trivy filesystem security scan
       - name: Trivy Security Scan
-        uses: aquasecurity/trivy-action@0.30.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -102,14 +102,14 @@ jobs:
 
             echo "Starting EC2 deployment..."
 
-            # Pull Docker image
+            # Pull latest image
             sudo docker pull upparagovindu/ci-cd-devops-pipeline:latest
 
-            # Create Docker network if missing
+            # Create application network if missing
             sudo docker network inspect app-net >/dev/null 2>&1 || \
               sudo docker network create app-net
 
-            # Start MongoDB
+            # Start MongoDB if it already exists
             if sudo docker container inspect mongodb >/dev/null 2>&1; then
               sudo docker start mongodb
             else
@@ -121,13 +121,13 @@ jobs:
                 mongo:7
             fi
 
-            # Connect MongoDB to application network
+            # Connect MongoDB to app network if needed
             sudo docker network connect app-net mongodb 2>/dev/null || true
 
-            # Remove old application container
+            # Remove old Spring Boot container
             sudo docker rm -f spring-app 2>/dev/null || true
 
-            # Start new Spring Boot container
+            # Deploy new Spring Boot container
             sudo docker run -d \
               --name spring-app \
               --network app-net \
@@ -138,7 +138,7 @@ jobs:
 
             echo "Deployment completed"
 
-            # Verify running containers
+            # Verify containers
             sudo docker ps
 
             # Check application logs
